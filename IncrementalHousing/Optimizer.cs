@@ -17,15 +17,28 @@ public interface IHousingWorld
     Guid[] GetAdults(Guid home);
     bool UsableHome(Guid home, Guid district);
     bool HasAdultVacancy(Guid home);
+    HousingPopulation GetPopulation(Guid home);
     bool TryDistance(Guid home, Guid work, out float distance);
     void Move(Guid person, Guid home);
     void Swap(Guid person, Guid other);
+}
+
+public sealed class HousingPopulation
+{
+    public int Adults, Children, Capacity, ChildSlots;
+    public bool Breeding;
+    public int Pairs => Breeding ? Adults / 2 : 0;
+    public int BirthSlots => Breeding ? Math.Max(0, Math.Min(ChildSlots, Pairs) - Children) : 0;
+    public int Free => Capacity - Adults - Children;
+    public HousingPopulation WithAdults(int adults) => new HousingPopulation {
+        Adults = adults, Children = Children, Capacity = Capacity, ChildSlots = ChildSlots, Breeding = Breeding };
 }
 
 public sealed class Plan
 {
     public Guid Home, Partner;
     public float Gain, NewDistance;
+    public int PairGain;
 }
 
 public sealed class Search
@@ -86,9 +99,10 @@ public sealed class Optimizer
             if (State.Next >= State.Queue.Count) return;
             var actor = _world.GetPerson(State.Queue[State.Next++]);
             State.Evaluated++;
-            // Children, unemployed, homeless and deleted beavers remain with vanilla housing.
-            if (actor == null || !actor.Adult || actor.Home == Guid.Empty || actor.Work == Guid.Empty ||
+            // Unemployed adults can repair fragmented breeding households.
+            if (actor == null || !actor.Adult || actor.Home == Guid.Empty ||
                 !_world.UsableHome(actor.Home, actor.District)) return;
+            if (actor.Work == Guid.Empty && _world.GetPopulation(actor.Home)?.Breeding != true) return;
             State.Active = new Search { Actor = actor, Homes = _world.GetHomes(actor.District) };
             Array.Sort(State.Active.Homes);
         }
@@ -120,7 +134,7 @@ public sealed class Optimizer
             {
                 Consider(search, Score(search.Actor, target, Guid.Empty));
             }
-            else if (ImprovesActor(search.Actor, target))
+            if (ImprovesActor(search.Actor, target))
             {
                 search.Residents = _world.GetAdults(target);
                 Array.Sort(search.Residents);
@@ -137,15 +151,28 @@ public sealed class Optimizer
     private Plan Score(Person actor, Guid target, Guid partnerId)
     {
         if (!_world.UsableHome(actor.Home, actor.District) || !_world.UsableHome(target, actor.District) ||
-            !Distance(actor.Home, actor.Work, out var before) || !Distance(target, actor.Work, out var after) ||
-            before - after <= MinimumSaving) return null;
+            !Distance(actor.Home, actor.Work, out var before) || !Distance(target, actor.Work, out var after)) return null;
         float gain = before - after;
+        int pairGain = 0;
         if (partnerId == Guid.Empty)
         {
             if (!_world.HasAdultVacancy(target)) return null;
+            var source = _world.GetPopulation(actor.Home);
+            var destination = _world.GetPopulation(target);
+            if (source == null || destination == null || source.Adults < 1) return null;
+            var sourceAfter = source.WithAdults(source.Adults - 1);
+            var destinationAfter = destination.WithAdults(destination.Adults + 1);
+            // Existing children already occupy breeding slots. Reserve only the remaining
+            // newborn capacity, using the same floor(adults / 2) rule as Timberborn.
+            if (destinationAfter.Free < destinationAfter.BirthSlots) return null;
+            pairGain = sourceAfter.Pairs + destinationAfter.Pairs - source.Pairs - destination.Pairs;
+            if (pairGain < 0 || sourceAfter.BirthSlots + destinationAfter.BirthSlots < source.BirthSlots + destination.BirthSlots)
+                return null;
+            if (pairGain == 0 && (actor.Work == Guid.Empty || gain <= MinimumSaving)) return null;
         }
         else
         {
+            if (actor.Work == Guid.Empty || gain <= MinimumSaving) return null;
             var partner = _world.GetPerson(partnerId);
             if (partner == null || !partner.Adult || partner.Id == actor.Id ||
                 partner.Home != target || partner.District != actor.District) return null;
@@ -157,11 +184,12 @@ public sealed class Optimizer
                 gain += oldOther - newOther;
             }
         }
-        return gain > MinimumSaving ? new Plan { Home = target, Partner = partnerId, Gain = gain, NewDistance = after } : null;
+        return pairGain > 0 || gain > MinimumSaving ? new Plan { Home = target, Partner = partnerId, Gain = gain, NewDistance = after, PairGain = pairGain } : null;
     }
 
     private bool Distance(Guid home, Guid work, out float value)
     {
+        if (work == Guid.Empty) { value = 0; return true; }
         return _world.TryDistance(home, work, out value) && value >= 0 && !float.IsNaN(value) && !float.IsInfinity(value);
     }
 
@@ -174,6 +202,7 @@ public sealed class Optimizer
 
     private static bool Better(Plan a, Plan b)
     {
+        if (a.PairGain != b.PairGain) return a.PairGain > b.PairGain;
         if (a.Gain != b.Gain) return a.Gain > b.Gain;
         if (a.NewDistance != b.NewDistance) return a.NewDistance < b.NewDistance;
         if ((a.Partner == Guid.Empty) != (b.Partner == Guid.Empty)) return a.Partner == Guid.Empty;

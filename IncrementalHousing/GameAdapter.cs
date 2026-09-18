@@ -32,7 +32,7 @@ public sealed class HousingConfigurator : Configurator
 
 public sealed class ModStarter : IModStarter
 {
-    public void StartMod(IModEnvironment environment) => Debug.Log("[IncrementalHousing] Preview 1 loaded.");
+    public void StartMod(IModEnvironment environment) => Debug.Log("[IncrementalHousing] Preview 2 loaded.");
 }
 
 public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITickableSingleton, IHousingWorld
@@ -49,6 +49,7 @@ public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITi
     // Tick-local only: warm/cold caches cannot affect the candidate budget or saved cursor.
     private readonly Dictionary<(Guid, Guid), (bool, float)> _distances = new Dictionary<(Guid, Guid), (bool, float)>();
     private readonly List<BaseComponent> _components = new List<BaseComponent>();
+    private readonly Dictionary<Guid, HousingPopulation> _populations = new Dictionary<Guid, HousingPopulation>();
 
     public HousingService(EventBus events, DistrictCenterRegistry districts, EntityRegistry entities,
         ISingletonLoader loader, ModRepository mods)
@@ -87,6 +88,7 @@ public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITi
     {
         if (_disabled) return;
         _distances.Clear();
+        _populations.Clear();
         _optimizer.Tick();
     }
 
@@ -136,14 +138,27 @@ public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITi
     {
         var home = Component<Dwelling>(homeId);
         if (!home || !home.HasFreeSlots) return false;
-        if (home.FreeAdultSlots > 0) return true;
+        var population = GetPopulation(homeId);
+        var after = population.WithAdults(population.Adults + 1);
+        return after.Free >= after.BirthSlots;
+    }
+
+    public HousingPopulation GetPopulation(Guid homeId)
+    {
+        if (_populations.TryGetValue(homeId, out var cached)) return cached;
+        var home = Component<Dwelling>(homeId);
+        if (!home) return null;
+        bool breeding = false;
         // The game's ProcreationHouse type is internal. Inspect component identity without
-        // publicizing game assemblies or invoking private methods; only needed at the adult limit.
+        // publicizing game assemblies or invoking private methods. Cache only for this tick.
         _components.Clear();
         home.GetComponents(_components);
         foreach (var component in _components)
-            if (component.GetType().FullName == "Timberborn.Reproduction.ProcreationHouse") return false;
-        return true;
+            if (component.GetType().FullName == "Timberborn.Reproduction.ProcreationHouse") { breeding = true; break; }
+        var population = new HousingPopulation { Adults = home.NumberOfAdultDwellers, Children = home.NumberOfChildDwellers,
+            Capacity = home.MaxBeavers, ChildSlots = home.ChildSlots, Breeding = breeding };
+        _populations[homeId] = population;
+        return population;
     }
 
     public bool TryDistance(Guid homeId, Guid workId, out float distance)

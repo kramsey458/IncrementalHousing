@@ -107,10 +107,61 @@ static class Program
                 }
             }
         });
+        Test("Folktails commute move cannot split the last pair", () => {
+            var(w,o)=Setup(); Breed(w,G(10),3);Breed(w,G(20),3); AddAdult(w,2,10);Drain(o);
+            Check(w.Trace.Count==0,"Last breeding pair split");
+        });
+        Test("separated unemployed survivors reunite despite no commute objective", () => {
+            var(w,o)=Setup(); Breed(w,G(10),3);Breed(w,G(20),3);Partner(w,0,0,false);w.People[G(1)].Work=Guid.Empty;Drain(o);
+            Check(w.People[G(1)].Home==G(20)&&o.State.Moves==1,"Pair not restored");
+        });
+        Test("breeding repair outranks a worse commute", () => {
+            var(w,o)=Setup(5,50);Breed(w,G(10),3);Breed(w,G(20),3);Partner(w,0,0,false);Drain(o);
+            Check(w.People[G(1)].Home==G(20),"Repair rejected for commute");
+        });
+        Test("adult swap still considered when direct move would split a pair", () => {
+            var(w,o)=Setup();Breed(w,G(10),6);Breed(w,G(20),6);AddAdult(w,3,10);Partner(w,30,1);Drain(o);
+            Check(o.State.Swaps==1&&w.GetPopulation(G(10)).Adults==2&&w.GetPopulation(G(20)).Adults==1,"Safe swap lost");
+        });
+        Test("child-only home reserves no nonexistent pair capacity", () => {
+            var(w,o)=Setup();Breed(w,G(10),6);Breed(w,G(20),3);AddAdult(w,3,10);AddAdult(w,4,10);
+            AddAdult(w,5,20);w.People[G(5)].Adult=false;AddAdult(w,6,20);w.People[G(6)].Adult=false;Drain(o);
+            Check(o.State.Moves==1&&w.GetPopulation(G(20)).Adults==1,"Child-only capacity wasted");
+        });
+        foreach(int capacity in new[]{3,6,9}) Test("newborn capacity protected for lodge capacity "+capacity, () => {
+            var(w,o)=Setup();Breed(w,G(10),9);Breed(w,G(20),capacity);
+            // An incoming adult would create another pair but leave insufficient newborn space.
+            for(int i=0;i<capacity-1;i++)AddAdult(w,1000+i,20);
+            Drain(o);Check(o.State.Moves==0,"Reserved newborn bed consumed");
+        });
+        Test("existing child already satisfies the pair reservation", () => {
+            var(w,o)=Setup();Breed(w,G(10),6);Breed(w,G(20),3);AddAdult(w,3,10);AddAdult(w,4,10);
+            AddAdult(w,5,20);AddAdult(w,6,20);w.People[G(6)].Adult=false;Drain(o);
+            Check(o.State.Moves==1&&w.GetPopulation(G(20)).Adults==2,"Existing child counted twice");
+        });
+        Test("new birth during unfinished scan invalidates reserved capacity", () => {
+            var(w,o)=Setup();Breed(w,G(10),6);Breed(w,G(20),3);AddAdult(w,3,10);AddAdult(w,4,10);AddDistantHouses(w,40);
+            o.Tick();AddAdult(w,5,20);AddAdult(w,6,20);AddAdult(w,7,20);w.People[G(7)].Adult=false;Drain(o);
+            Check(o.State.Moves==0,"Stale capacity used");
+        });
+        Test("non-breeding housing can still use its final bed", () => {var(w,o)=Setup();Drain(o);Check(o.State.Moves==1,"Non-breeding regression");});
+        Test("saved breeding repair resumes deterministically", () => {
+            var(w,a)=Setup(5,50);Breed(w,G(10),3);Breed(w,G(20),3);Partner(w,0,0,false);AddDistantHouses(w,40);
+            a.Tick();var w2=w.Copy();w2.Reverse=true;var b=Reload(w2,a);Drain(a);Drain(b);
+            Check(a.State.Moves==1&&JsonConvert.SerializeObject(a.State)==JsonConvert.SerializeObject(b.State),"Repair restore");
+            Check(string.Join(";",w.Trace)==string.Join(";",w2.Trace),"Repair moves diverged");
+        });
+        Test("Preview 1 saved move is checked against new breeding rules", () => {
+            var(w,o)=Setup();Breed(w,G(10),3);Breed(w,G(20),3);AddAdult(w,3,10);
+            o.State.Active=new Search{Actor=w.GetPerson(G(1)),Best=new Plan{Home=G(20),Gain=15,NewDistance=5}};
+            o.State.Next=o.State.Queue.Count;Drain(o);Check(w.Trace.Count==0,"Old unsafe plan applied");
+        });
         Console.WriteLine($"{passed} checks passed. Native Unity execution and two-player playtest are not exercised.");
     }
     static void AddDistantHouses(World w,int count){for(int i=30;i<30+count;i++){w.Homes[G(i)]=new Home();w.Routes[(G(i),G(100))]=100;}}
-    sealed class Home { public int Capacity=1,AdultLimit=1; public bool Usable=true; public Guid District=G(999); }
+    static void Breed(World w,Guid home,int capacity){w.Homes[home].Breeding=true;w.Homes[home].Capacity=capacity;w.Homes[home].AdultLimit=capacity;}
+    static void AddAdult(World w,int person,int home){w.People[G(person)]=new Person{Id=G(person),Home=G(home),District=G(999),Adult=true};}
+    sealed class Home { public int Capacity=1,AdultLimit=1; public bool Usable=true; public bool Breeding; public Guid District=G(999); }
     sealed class World : IHousingWorld
     {
         public Dictionary<Guid,Person> People=new();public Dictionary<Guid,Home> Homes=new();
@@ -119,11 +170,13 @@ static class Program
         public Guid[] GetHomes(Guid district)=>(Reverse?Homes.Keys.Reverse():Homes.Keys).ToArray();
         public Guid[] GetAdults(Guid home){var ids=People.Values.Where(p=>p.Home==home&&p.Adult).Select(p=>p.Id);return(Reverse?ids.Reverse():ids).ToArray();}
         public bool UsableHome(Guid home,Guid district)=>Homes.TryGetValue(home,out var h)&&h.Usable&&h.District==district;
+        public HousingPopulation GetPopulation(Guid home)=>Homes.TryGetValue(home,out var h)?new HousingPopulation{Adults=People.Values.Count(p=>p.Home==home&&p.Adult),Children=People.Values.Count(p=>p.Home==home&&!p.Adult),Capacity=h.Capacity,ChildSlots=h.Capacity/3,Breeding=h.Breeding}:null;
         public bool HasAdultVacancy(Guid home)=>Homes.TryGetValue(home,out var h)&&People.Values.Count(p=>p.Home==home)<h.Capacity&&People.Values.Count(p=>p.Home==home&&p.Adult)<h.AdultLimit;
         public bool TryDistance(Guid home,Guid work,out float distance){Calls++;return Routes.TryGetValue((home,work),out distance);}
         public void Move(Guid person,Guid home){Check(HasAdultVacancy(home),"Full destination");People[person].Home=home;Trace.Add($"M:{person}:{home}");}
         public void Swap(Guid person,Guid other){(People[person].Home,People[other].Home)=(People[other].Home,People[person].Home);Trace.Add($"S:{person}:{other}");}
         public float Total()=>People.Values.Where(p=>p.Work!=Guid.Empty).Sum(p=>Routes[(p.Home,p.Work)]);
-        public World Copy(){var w=new World{Reverse=Reverse};foreach(var p in People)w.People[p.Key]=GetPerson(p.Key);foreach(var h in Homes)w.Homes[h.Key]=new Home{Capacity=h.Value.Capacity,AdultLimit=h.Value.AdultLimit,Usable=h.Value.Usable,District=h.Value.District};foreach(var r in Routes)w.Routes[r.Key]=r.Value;w.Trace.AddRange(Trace);return w;}
+        public World Copy(){var w=new World{Reverse=Reverse};foreach(var p in People)w.People[p.Key]=GetPerson(p.Key);foreach(var h in Homes)w.Homes[h.Key]=new Home{Capacity=h.Value.Capacity,AdultLimit=h.Value.AdultLimit,Usable=h.Value.Usable,Breeding=h.Value.Breeding,District=h.Value.District};foreach(var r in Routes)w.Routes[r.Key]=r.Value;w.Trace.AddRange(Trace);return w;}
     }
 }
+

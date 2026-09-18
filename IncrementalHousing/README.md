@@ -1,13 +1,13 @@
-# Incremental Housing — Preview 1
+# Incremental Housing — Preview 2
 
-Standalone Timberborn 1.1 mod, built against installed game **1.1.2.4**. Version **0.1.0**.
+Standalone Timberborn 1.1 mod, built against installed game **1.1.2.4**. Version **0.2.0**.
 Gradually improves beavers' home-to-work commutes through beneficial moves and swaps.
 
 ## Installation
 
-1. Close Timberborn. Extract `IncrementalHousing-preview1.zip` into
+1. Close Timberborn. Extract `IncrementalHousing-preview2.zip` into
    `Documents/Timberborn/Mods`. The ZIP contains an `IncrementalHousing-Preview` folder.
-2. Launch Timberborn and enable **Incremental Housing - Preview 0.1.0** in the mod manager.
+2. Launch Timberborn and enable **Incremental Housing - Preview 0.2.0** in the mod manager.
 3. Restart the game to apply the change.
 4. Load a copy of your save. Processing begins at the next daytime-start event.
    On subsequent loads, an existing saved queue resumes immediately.
@@ -20,21 +20,31 @@ For multiplayer, install the identical package on both computers.
 - At daytime start, queue district beavers in persistent entity-ID order.
   Pending work stays ahead of newly queued work, so large towns cannot starve
   beavers at the end of the list.
-- Evaluate employed, housed adult beavers. Leave children, homeless beavers and
-  unemployed actors to vanilla housing. An unemployed adult can be a swap partner;
-  its assigned-workplace commute cost is zero.
+- Evaluate housed adult beavers. Unemployed adults in breeding houses can reunite
+  separated survivors; otherwise they remain with vanilla housing. Children and
+  homeless beavers remain with vanilla housing. Unemployed adults have zero commute cost.
 - Measure actual road-path distance from home to the assigned workplace.
   Ignore unreachable routes, paused/automatically disabled workplaces and homes,
   blocked homes, deleted entities, and cross-district assignments.
 - Evaluate vacancies in all existing homes in the actor's district. A vacancy
   means a free adult-eligible bed, not necessarily a completely empty building.
-  Keep Folktails procreation-house child capacity available. Other houses may use
-  any unoccupied bed.
-- If a closer home has no adult-eligible vacancy, evaluate its adult occupants as
+  For breeding houses, reserve `max(0, min(child slots, floor(adults / 2)) - children)`
+  empty beds after the proposed move. Existing children already fill those slots.
+  Child-only lodges have no pairs to reserve for; occupancy is recalculated when an
+  adult moves in. Non-breeding houses may use any unoccupied bed.
+- Direct moves cannot reduce the combined adult-pair count or remaining newborn
+  capacity of the two affected homes. In particular, splitting the last pair into
+  two singletons is rejected. Existing adult/child distributions are preserved by swaps.
+- A move that creates an additional housed pair takes priority over commute savings,
+  even if the initiating adult's commute grows. This reunites isolated adults after
+  population losses without daily evictions. Both employed and unemployed survivors
+  can participate. Recovery requires a usable destination with capacity; births still
+  depend on the game's health, needs, timing and reproduction rules.
+- For a closer home, also evaluate its adult occupants as
   swap partners. The initiating beaver must improve by more than **0.5 path-distance
   units**, and total saving for both beavers must also exceed **0.5**. For example,
   saving 12 while costing the partner 4 is accepted; saving 12 while costing 13 is rejected.
-- Choose the largest combined saving found. Ties prefer the actor's shorter
+- Choose the largest pair-count improvement first, then combined commute saving. Ties prefer the actor's shorter
   commute, then a direct move, then stable home and partner IDs.
 - Recheck the chosen move at commit time. Changed jobs/homes/districts invalidate
   an actor's unfinished search. A stale destination or newly harmful swap is skipped.
@@ -45,9 +55,9 @@ For multiplayer, install the identical package on both computers.
 
 The algorithm makes local improvements; it does not guarantee a globally optimal
 assignment. Three-way cycles, future jobs, mobile workers' actual work sites,
-non-work travel, happiness and family/breeding arrangements are outside its objective.
-Vanilla systems may subsequently change housing. The mod preserves child beds and
-does not swap children, but adult moves can change a home's breeding population.
+non-work travel and happiness are outside its objective. Breeding safeguards preserve
+pair counts and slot capacity, not particular partners or exact vanilla distributions.
+Vanilla systems may subsequently change housing. Children are never moved by this mod.
 
 ## Performance and multiplayer design
 
@@ -76,11 +86,15 @@ does not swap children, but adult moves can change a home's breeding population.
 ## Validation
 
 Release build against the installed game assemblies: zero errors and warnings.
-36 automated planner checks cover moves, beneficial/harmful swaps, protected child
+49 automated planner checks cover moves, beneficial/harmful swaps, protected child
 beds, malformed/unreachable distances, job/home/district changes, deleted beavers,
 newly blocked/full houses, deterministic ties, queue rollover and save/load of both
 home and resident scans. Randomized mirrored simulations check identical decisions,
-capacity and non-increasing total commute over 40 layouts and three passes each.
+capacity and non-increasing total commute over 40 non-breeding layouts and three passes each.
+13 additional breeding checks cover split-pair prevention, unemployed-survivor repair,
+safe swaps with vacancies, child-only lodges, 3/6/9-bed capacity, occupied child slots,
+births during planning, breeding-repair save/reload and Preview 1 saved-plan revalidation.
+Breeding-repair moves intentionally may increase commute distance.
 
 These are managed planner tests using a fake world; the adapter is compiled against
 real game APIs. Native Unity pathfinding, event callbacks and a live two-player
@@ -108,3 +122,4 @@ path; adjust the test project HintPath on another machine. No game DLLs are dist
 To uninstall, disable this mod in the mod manager and restart the game.
 The saved queue can remain in the save; beavers retain normal game home assignments.
 Keep an original save copy to undo moves already made.
+
