@@ -32,10 +32,10 @@ public sealed class HousingConfigurator : Configurator
 
 public sealed class ModStarter : IModStarter
 {
-    public void StartMod(IModEnvironment environment) => Debug.Log("[IncrementalHousing] Preview 2 loaded.");
+    public void StartMod(IModEnvironment environment) => Debug.Log("[IncrementalHousing] Preview 3 loaded.");
 }
 
-public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITickableSingleton, IHousingWorld
+public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITickableSingleton, IHousingWorld, ISingletonNavMeshListener
 {
     private static readonly SingletonKey SaveKey = new SingletonKey("IncrementalHousing");
     private static readonly PropertyKey<string> StateKey = new PropertyKey<string>("State");
@@ -48,6 +48,7 @@ public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITi
     private bool _disabled;
     // Tick-local only: warm/cold caches cannot affect the candidate budget or saved cursor.
     private readonly Dictionary<(Guid, Guid), (bool, float)> _distances = new Dictionary<(Guid, Guid), (bool, float)>();
+    private readonly RouteCache<(Guid, Guid, Vector3, Vector3)> _routes = new RouteCache<(Guid, Guid, Vector3, Vector3)>();
     private readonly List<BaseComponent> _components = new List<BaseComponent>();
     private readonly Dictionary<Guid, HousingPopulation> _populations = new Dictionary<Guid, HousingPopulation>();
 
@@ -59,6 +60,7 @@ public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITi
 
     public void Load()
     {
+        _routes.Clear();
         foreach (var mod in _mods.EnabledMods)
             if (mod.Manifest.Id == "BobHousingOptimize" || mod.Manifest.Id == "BobCommuteBalancer" || mod.Manifest.Id == "housingoptimize")
             {
@@ -77,6 +79,7 @@ public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITi
     [OnEvent]
     public void OnDaytimeStart(DaytimeStartEvent ev)
     {
+        _routes.Clear();
         var ids = new List<Guid>();
         foreach (var district in _districts.FinishedDistrictCenters)
             foreach (var beaver in district.DistrictPopulation.Beavers)
@@ -90,6 +93,14 @@ public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITi
         _distances.Clear();
         _populations.Clear();
         _optimizer.Tick();
+    }
+
+    // Regular, committed navigation updates include added/removed/blocked road
+    // and zipline edges. Preview placement changes are not simulation routes.
+    public void OnNavMeshUpdated(NavMeshUpdate update)
+    {
+        _routes.Clear();
+        _distances.Clear();
     }
 
     public Person GetPerson(Guid id)
@@ -170,8 +181,20 @@ public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITi
         var start = home ? home.GetEnabledComponent<Accessible>() : null;
         var end = work ? work.GetEnabledComponent<Accessible>() : null;
         distance = 0;
-        bool ok = start && end && start.ValidAccessible && end.ValidAccessible && start.HasSingleAccess &&
-            end.Accesses.Count > 0 && start.FindRoadPath(end, out distance);
+        if (!start || !end || !BuildingUsable(home) || !BuildingUsable(work) ||
+            !start.ValidAccessible || !end.ValidAccessible || !start.HasSingleAccess || end.Accesses.Count == 0) return false;
+        // Recheck endpoint blocking and exact positions before every cross-tick hit.
+        // Multi-access workplaces retain the game's native minimum-over-accesses query.
+        var from = start.UnblockedSingleAccess;
+        var to = end.HasSingleAccess ? end.UnblockedSingleAccess : null;
+        bool cacheable = from.HasValue && to.HasValue;
+        var routeKey = (homeId, workId, from.GetValueOrDefault(), to.GetValueOrDefault());
+        bool ok = cacheable && _routes.TryGet(routeKey, out distance);
+        if (!ok)
+        {
+            ok = start.FindRoadPath(end, out distance);
+            if (ok && cacheable) _routes.Store(routeKey, distance);
+        }
         _distances[key] = (ok, distance);
         return ok;
     }

@@ -1,111 +1,100 @@
-# Incremental Housing — Preview 2
+# Incremental Housing — Preview 3
 
-Standalone Timberborn 1.1 mod, built against installed game **1.1.2.4**. Version **0.2.0**.
-Gradually improves beavers' home-to-work commutes through beneficial moves and swaps.
+Standalone Timberborn 1.1 mod, built against game **1.1.2.4**. Version **0.3.0**.
+Gradually reduces home-to-assigned-workplace commute cost through beneficial moves and swaps.
 
 ## Installation
 
-1. Close Timberborn. Extract `IncrementalHousing-preview2.zip` into
-   `Documents/Timberborn/Mods`. The ZIP contains an `IncrementalHousing-Preview` folder.
-2. Launch Timberborn and enable **Incremental Housing - Preview 0.2.0** in the mod manager.
-3. Restart the game to apply the change.
-4. Load a copy of your save. Processing begins at the next daytime-start event.
-   On subsequent loads, an existing saved queue resumes immediately.
+1. Close Timberborn. Extract `IncrementalHousing-preview3.zip` into `Documents/Timberborn/Mods`.
+   The ZIP contains an `IncrementalHousing-Preview` folder.
+2. Launch Timberborn and enable **Incremental Housing - Preview 0.3.0** in the mod manager.
+3. Restart the game, then load a copy of your save.
+4. Processing starts at the next daytime-start event. A saved queue resumes immediately on load.
 
-This is a standalone mod with no additional mod dependencies.
-For multiplayer, install the identical package on both computers.
+No additional mod dependencies. For multiplayer, install the identical package on both computers.
 
-## Behavior
+## Commute objective
 
-- At daytime start, queue district beavers in persistent entity-ID order.
-  Pending work stays ahead of newly queued work, so large towns cannot starve
-  beavers at the end of the list.
-- Evaluate housed adult beavers. Unemployed adults in breeding houses can reunite
-  separated survivors; otherwise they remain with vanilla housing. Children and
-  homeless beavers remain with vanilla housing. Unemployed adults have zero commute cost.
-- Measure actual road-path distance from home to the assigned workplace.
-  Ignore unreachable routes, paused/automatically disabled workplaces and homes,
-  blocked homes, deleted entities, and cross-district assignments.
-- Evaluate vacancies in all existing homes in the actor's district. A vacancy
-  means a free adult-eligible bed, not necessarily a completely empty building.
-  For breeding houses, reserve `max(0, min(child slots, floor(adults / 2)) - children)`
-  empty beds after the proposed move. Existing children already fill those slots.
-  Child-only lodges have no pairs to reserve for; occupancy is recalculated when an
-  adult moves in. Non-breeding houses may use any unoccupied bed.
-- Direct moves cannot reduce the combined adult-pair count or remaining newborn
-  capacity of the two affected homes. In particular, splitting the last pair into
-  two singletons is rejected. Existing adult/child distributions are preserved by swaps.
-- A move that creates an additional housed pair takes priority over commute savings,
-  even if the initiating adult's commute grows. This reunites isolated adults after
-  population losses without daily evictions. Both employed and unemployed survivors
-  can participate. Recovery requires a usable destination with capacity; births still
-  depend on the game's health, needs, timing and reproduction rules.
-- For a closer home, also evaluate its adult occupants as
-  swap partners. The initiating beaver must improve by more than **0.5 path-distance
-  units**, and total saving for both beavers must also exceed **0.5**. For example,
-  saving 12 while costing the partner 4 is accepted; saving 12 while costing 13 is rejected.
-- Choose the largest pair-count improvement first, then combined commute saving. Ties prefer the actor's shorter
-  commute, then a direct move, then stable home and partner IDs.
-- Recheck the chosen move at commit time. Changed jobs/homes/districts invalidate
-  an actor's unfinished search. A stale destination or newly harmful swap is skipped.
-  The next daily pass can reconsider it.
-- Existing homes remain assigned throughout planning. Only actual movers are
-  unassigned. A full-house swap frees both adult beds and assigns both beavers
-  synchronously in the same simulation tick.
+The score is Timberborn's **zipline-aware road-route cost**, returned by `Accessible.FindRoadPath`.
+It follows the real road navigation graph, including zipline speed weighting. It is not straight-line
+separation or literal meters walked, and does not model congestion or the full day's travel time.
 
-The algorithm makes local improvements; it does not guarantee a globally optimal
-assignment. Three-way cycles, future jobs, mobile workers' actual work sites,
-non-work travel and happiness are outside its objective. Breeding safeguards preserve
-pair counts and slot capacity, not particular partners or exact vanilla distributions.
-Vanilla systems may subsequently change housing. Children are never moved by this mod.
+Every direct move must save more than **0.5 route-cost units**. A swap must improve the initiating
+beaver's commute by more than 0.5 and save more than 0.5 across both beavers combined. Saving
+12 while costing the partner 4 is accepted; saving 12 while costing 13 is rejected.
 
-## Performance and multiplayer design
+The planner considers all existing eligible homes in the same district, including partially occupied
+homes with a spare bed. It also considers adult swaps when a direct move is possible, since the swap
+may save more overall or preserve a breeding pair. It chooses the largest combined saving. Ties prefer
+additional breeding pairs, then the actor's shorter route, then a direct move, then stable entity IDs.
+Coworkers exchanging homes cannot save combined commute cost and are skipped before path queries.
 
-- **16 candidate steps per simulation tick**, at most one completed actor per tick.
-  A step examines one home or one potential swap partner. Large searches resume
-  over multiple ticks; the budget never depends on elapsed milliseconds or frame rate.
-- At most 64 planner distance lookups per tick, with duplicate home/work queries
-  cached within that tick. Actual path API calls are normally fewer. Timberborn's
-  underlying road flow-field cache is also reused.
-- No daily all-resident eviction; no per-workplace dictionary of every house's
-  distance followed by sorting. A daily queue snapshot remains O(population log population).
-  Starting an actor snapshots and sorts district home IDs; entering an occupied
-  candidate snapshots and sorts its adults. These list operations are not separately
-  time-sliced. One cold native path query also has no wall-clock time guarantee.
-- The budget bounds per-tick candidate work, not total daily work. A dense settlement
-  may take multiple game days to complete its queue. Exploring all houses and swap
-  partners spreads the work across ticks. No FPS or milliseconds improvement is
-  claimed without in-game profiling.
-- Uses normal `ITickableSingleton` simulation ticks and committed district/path
-  data, not `Update`, wall time, random numbers, placement-preview registries or
-  background Unity access.
-- Queue, scan cursors, candidate snapshots and best plan are saved with the game.
-  This avoids restarting different scans after a join/rehost/save-load. Distance
-  caches are tick-local and cannot change the number of candidate steps.
+Only housed, employed adults initiate searches. Unemployed adults can be swap partners with zero
+assigned-workplace commute cost. Children and homeless beavers remain with vanilla housing.
+Unreachable routes, invalid costs, disabled/paused/blocked homes or workplaces, and cross-district
+assignments are excluded. Already minimal commutes skip the district scan.
+
+## Breeding safeguards
+
+For breeding houses, direct moves cannot reduce the combined adult-pair count or remaining newborn
+capacity of the affected homes. Splitting the last pair into two singletons is rejected. Adult swaps
+preserve each home's adult and child counts. Children are never moved by this mod.
+
+After a proposed direct move, reserve this many empty beds:
+`max(0, min(child slots, floor(adults / 2)) - children)`.
+Existing children already occupy those slots. Child-only homes have no pairs to reserve for;
+occupancy is recalculated when an adult arrives. Non-breeding houses may use any unoccupied bed.
+
+**Changed from Preview 2:** forming an extra pair no longer overrides commute savings. Separated
+survivors may reunite when doing so also shortens an employed adult's commute. This optimizer does
+not force a longer commute or move unemployed actors to repair an already fragmented population.
+Pair and slot safeguards are structural; they do not guarantee fertility, births or population recovery.
+
+## Gradual work and performance
+
+- At daytime start, queue district beavers in stable ID order. Unfinished work keeps priority.
+- Spend **16 work steps per simulation tick**, with at most one completed actor per tick. A step
+  admits/skips an actor, examines one home, or examines one adult swap candidate. Children and
+  other ineligible actors share the budget instead of each consuming a whole tick.
+- At most 64 planner distance lookups per tick. Repeated queries within a tick are memoized.
+- Share successful single-access home/work routes across ticks and workers, up to **8,192 entries**.
+  Keys include both entity IDs and exact access coordinates. Endpoint validity, blocking and
+  building usability are checked before cross-tick reuse. Committed navigation updates clear the
+  cache, including road and zipline changes. Daytime start and loading also clear it. Capacity
+  overflow clears the cache; failed routes are not cached across ticks. Multi-access workplaces
+  use the native query with tick-local memoization.
+- Cache warmth never changes work-step counts or candidate order. No elapsed-time budgets,
+  random ordering, background Unity access or placement-preview navigation are used.
+- Queue, search snapshots, cursors and best candidate are saved. Old saved candidates are
+  rechecked under the current rules before applying. Changed jobs, homes or districts cancel
+  unfinished searches. Occupancy, reachability and savings are checked again at commit.
+- Existing residents keep their homes during planning. Swaps free both beds and assign both
+  adults synchronously in one tick; there is no daily eviction and reassignment pass.
+
+This is a local optimizer, not a guaranteed global optimum. Dense colonies may take multiple days
+for a queue pass. Daily population sorting, district-home snapshots, resident snapshots and cold
+native path queries are not individually time-sliced. Vanilla housing may subsequently move residents.
+Three-way cycles, future jobs, mobile workers' actual work sites, non-work travel and happiness are
+outside the objective. No FPS or milliseconds improvement is claimed without live profiling.
 
 ## Validation
 
-Release build against the installed game assemblies: zero errors and warnings.
-49 automated planner checks cover moves, beneficial/harmful swaps, protected child
-beds, malformed/unreachable distances, job/home/district changes, deleted beavers,
-newly blocked/full houses, deterministic ties, queue rollover and save/load of both
-home and resident scans. Randomized mirrored simulations check identical decisions,
-capacity and non-increasing total commute over 40 non-breeding layouts and three passes each.
-13 additional breeding checks cover split-pair prevention, unemployed-survivor repair,
-safe swaps with vacancies, child-only lodges, 3/6/9-bed capacity, occupied child slots,
-births during planning, breeding-repair save/reload and Preview 1 saved-plan revalidation.
-Breeding-repair moves intentionally may increase commute distance.
+Release build against installed game assemblies: zero warnings and errors. **58 automated checks**
+cover harmful/beneficial moves and swaps, breeding safeguards, stale saved plans, route changes,
+queue fairness, deterministic ties, save/load and cache behavior. Randomized mirrored peers cover
+40 non-breeding layouts across three daily passes, plus 40 breeding layouts. Tests assert identical
+states/decisions, capacity limits and non-increasing combined commute cost.
 
-These are managed planner tests using a fake world; the adapter is compiled against
-real game APIs. Native Unity pathfinding, event callbacks and a live two-player
-session have **not** been exercised. This is a playtest preview; multiplayer
-compatibility still requires live testing.
+A synthetic shared-workplace fixture made 3,340 planner distance lookups but only 82 underlying
+route-query stand-ins with the shared cache. This demonstrates duplicate suppression, not an
+in-game speedup measurement. Warm/cold cache tests preserve exact decisions and commit ticks.
 
-Recommended first playtest: run through several daytime starts, save/rehost during
-processing, change a worker's job, pause/automate housing and remove a road. Confirm
-both peers retain identical home assignments and there are no IncrementalHousing
-exceptions. Profile morning spikes, per-tick time, path calls and queue completion
-on the same colony before raising the work budget.
+The tests use a fake world. The adapter compiles against real game APIs, and navigation/accessibility
+invalidation was checked against the installed game code. Native Unity execution and a live
+BeaverBuddies two-player session have **not** been exercised. This remains a playtest preview.
+
+For live testing, change roads/ziplines, pause a workplace, save/rehost during a scan, and compare
+both peers' home assignments. Profile tick spikes and full-queue completion on the same colony.
 
 ## Build and tests
 
@@ -114,12 +103,12 @@ Requires .NET SDK 8 and a local Timberborn installation. No NuGet packages requi
 ```powershell
 dotnet build IncrementalHousing/IncrementalHousing.csproj -c Release -p:GameManaged="C:\path\Timberborn_Data\Managed"
 dotnet run --project IncrementalHousing.Tests -c Release
+./package.ps1
 ```
 
-The tests' Newtonsoft.Json reference defaults to the same standard Steam installation
-path; adjust the test project HintPath on another machine. No game DLLs are distributed.
+The tests' Newtonsoft.Json reference defaults to the standard Steam installation; adjust the test
+project HintPath on another machine. No game DLLs are distributed. The repository packaging script
+writes to `dist`; existing archive names must be moved aside before packaging again.
 
-To uninstall, disable this mod in the mod manager and restart the game.
-The saved queue can remain in the save; beavers retain normal game home assignments.
-Keep an original save copy to undo moves already made.
-
+To uninstall, disable this mod and restart. The saved queue can remain in the save; beavers retain
+normal game home assignments. Keep an original save copy to undo moves already made.

@@ -94,24 +94,28 @@ public sealed class Optimizer
 
     public void Tick()
     {
-        if (State.Active == null)
+        int step = 0;
+        while (State.Active == null && step < StepsPerTick)
         {
             if (State.Next >= State.Queue.Count) return;
             var actor = _world.GetPerson(State.Queue[State.Next++]);
             State.Evaluated++;
-            // Unemployed adults can repair fragmented breeding households.
-            if (actor == null || !actor.Adult || actor.Home == Guid.Empty ||
-                !_world.UsableHome(actor.Home, actor.District)) return;
-            if (actor.Work == Guid.Empty && _world.GetPopulation(actor.Home)?.Breeding != true) return;
+            step++;
+            // A fixed budget also covers skipped actors. No full district scan when
+            // nonnegative route costs cannot possibly improve this commute.
+            if (actor == null || !actor.Adult || actor.Home == Guid.Empty || actor.Work == Guid.Empty ||
+                !_world.UsableHome(actor.Home, actor.District) ||
+                !Distance(actor.Home, actor.Work, out var distance) || distance <= MinimumSaving) continue;
             State.Active = new Search { Actor = actor, Homes = _world.GetHomes(actor.District) };
             Array.Sort(State.Active.Homes);
         }
+        if (State.Active == null) return;
 
         var search = State.Active;
         var current = _world.GetPerson(search.Actor.Id);
         if (!SameAssignment(current, search.Actor)) { State.Active = null; return; }
 
-        for (int step = 0; step < StepsPerTick; step++)
+        for (; step < StepsPerTick; step++)
         {
             if (search.ResidentIndex < search.Residents.Length)
             {
@@ -130,15 +134,13 @@ public sealed class Optimizer
             search.Target = target;
             search.Residents = Array.Empty<Guid>();
             search.ResidentIndex = 0;
+            if (!ImprovesActor(search.Actor, target)) continue;
             if (_world.HasAdultVacancy(target))
             {
                 Consider(search, Score(search.Actor, target, Guid.Empty));
             }
-            if (ImprovesActor(search.Actor, target))
-            {
-                search.Residents = _world.GetAdults(target);
-                Array.Sort(search.Residents);
-            }
+            search.Residents = _world.GetAdults(target);
+            Array.Sort(search.Residents);
         }
     }
 
@@ -150,9 +152,19 @@ public sealed class Optimizer
 
     private Plan Score(Person actor, Guid target, Guid partnerId)
     {
+        if (actor.Work == Guid.Empty) return null;
+        Person partner = null;
+        if (partnerId != Guid.Empty)
+        {
+            partner = _world.GetPerson(partnerId);
+            if (partner == null || !partner.Adult || partner.Id == actor.Id ||
+                partner.Home != target || partner.District != actor.District || partner.Work == actor.Work) return null;
+            // Coworkers exchanging homes have exactly zero combined saving.
+        }
         if (!_world.UsableHome(actor.Home, actor.District) || !_world.UsableHome(target, actor.District) ||
             !Distance(actor.Home, actor.Work, out var before) || !Distance(target, actor.Work, out var after)) return null;
         float gain = before - after;
+        if (gain <= MinimumSaving) return null;
         int pairGain = 0;
         if (partnerId == Guid.Empty)
         {
@@ -168,14 +180,9 @@ public sealed class Optimizer
             pairGain = sourceAfter.Pairs + destinationAfter.Pairs - source.Pairs - destination.Pairs;
             if (pairGain < 0 || sourceAfter.BirthSlots + destinationAfter.BirthSlots < source.BirthSlots + destination.BirthSlots)
                 return null;
-            if (pairGain == 0 && (actor.Work == Guid.Empty || gain <= MinimumSaving)) return null;
         }
         else
         {
-            if (actor.Work == Guid.Empty || gain <= MinimumSaving) return null;
-            var partner = _world.GetPerson(partnerId);
-            if (partner == null || !partner.Adult || partner.Id == actor.Id ||
-                partner.Home != target || partner.District != actor.District) return null;
             // An unemployed adult has no assigned-workplace commute to worsen.
             if (partner.Work != Guid.Empty)
             {
@@ -184,7 +191,7 @@ public sealed class Optimizer
                 gain += oldOther - newOther;
             }
         }
-        return pairGain > 0 || gain > MinimumSaving ? new Plan { Home = target, Partner = partnerId, Gain = gain, NewDistance = after, PairGain = pairGain } : null;
+        return gain > MinimumSaving ? new Plan { Home = target, Partner = partnerId, Gain = gain, NewDistance = after, PairGain = pairGain } : null;
     }
 
     private bool Distance(Guid home, Guid work, out float value)
@@ -202,8 +209,8 @@ public sealed class Optimizer
 
     private static bool Better(Plan a, Plan b)
     {
-        if (a.PairGain != b.PairGain) return a.PairGain > b.PairGain;
         if (a.Gain != b.Gain) return a.Gain > b.Gain;
+        if (a.PairGain != b.PairGain) return a.PairGain > b.PairGain;
         if (a.NewDistance != b.NewDistance) return a.NewDistance < b.NewDistance;
         if ((a.Partner == Guid.Empty) != (b.Partner == Guid.Empty)) return a.Partner == Guid.Empty;
         if (a.Home != b.Home) return a.Home.CompareTo(b.Home) < 0;
