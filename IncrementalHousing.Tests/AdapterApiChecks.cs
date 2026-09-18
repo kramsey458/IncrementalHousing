@@ -29,6 +29,7 @@ static class AdapterApiChecks
             .ToDictionary(op => unchecked((ushort)op.Value));
         bool populationUsesAllComponents = false;
         int checkedRetrievals = 0;
+        bool readsAssignedWorkplace = false;
         foreach (var method in service.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
         {
             var il = method.GetMethodBody()?.GetILAsByteArray();
@@ -41,6 +42,11 @@ static class AdapterApiChecks
                 if (op.OperandType == OperandType.InlineMethod)
                 {
                     var called = method.Module.ResolveMethod(BitConverter.ToInt32(il, pos), service.GetGenericArguments(), method.GetGenericArguments())!;
+                    if (method.Name == "Snapshot" && called.DeclaringType?.FullName == "Timberborn.WorkSystem.Worker")
+                    {
+                        if (called.Name == "get_Workplace") readsAssignedWorkplace = true;
+                        if (called.Name == "get_Employed") throw new Exception("Assigned job must not depend on current employment activation.");
+                    }
                     if (called.DeclaringType?.FullName == "Timberborn.BaseComponentSystem.BaseComponent")
                     {
                         if (method.Name == "GetPopulation" && called.Name == "get_AllComponents") populationUsesAllComponents = true;
@@ -59,8 +65,9 @@ static class AdapterApiChecks
                 };
             }
         }
-        if (!populationUsesAllComponents || checkedRetrievals == 0)
+        if (!populationUsesAllComponents || !readsAssignedWorkplace || checkedRetrievals == 0)
             throw new Exception("Adapter must use AllComponents for breeding detection and pass the game's retrieval blacklist.");
         Console.WriteLine($"Adapter API check: crash reproduced against real blacklist; {checkedRetrievals} concrete retrieval calls accepted; GetPopulation uses AllComponents.");
     }
 }
+

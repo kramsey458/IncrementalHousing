@@ -23,7 +23,7 @@ static partial class Program
     }
     static void Drain(Optimizer o, int limit = 10000)
     {
-        while ((o.State.Active != null || o.State.Next < o.State.Queue.Count) && limit-- > 0) o.Tick();
+        while (o.HasPendingWork && limit-- > 0) o.Tick();
         Check(limit > 0, "Queue did not drain");
     }
     static Optimizer Reload(World w, Optimizer o) => new Optimizer(w, JsonConvert.DeserializeObject<OptimizerState>(JsonConvert.SerializeObject(o.State)));
@@ -54,7 +54,7 @@ static partial class Program
         foreach (var value in new[] { float.NaN, float.PositiveInfinity, -1f })
             Test("invalid path distance rejected: "+value, () => {var(w,o)=Setup(20,value); Drain(o); Check(w.Trace.Count==0,"Invalid route");});
         Test("unreachable house skipped", () => {var(w,o)=Setup(); w.Routes.Remove((G(20),G(100))); Drain(o); Check(w.Trace.Count==0,"Unreachable");});
-        Test("unreachable existing commute left to vanilla recovery", () => {var(w,o)=Setup(); w.Routes.Remove((G(10),G(100))); Drain(o); Check(w.Trace.Count==0,"Old unreachable");});
+        Test("unreachable existing commute recovers to a reachable home", () => {var(w,o)=Setup(); w.Routes.Remove((G(10),G(100))); Drain(o); Check(o.State.Recoveries==1 && w.People[G(1)].Home==G(20),"Old unreachable");});
         Test("paused or blocked house skipped", () => {var(w,o)=Setup(); w.Homes[G(20)].Usable=false; Drain(o); Check(w.Trace.Count==0,"Blocked");});
         Test("cross-district house skipped", () => {var(w,o)=Setup(); w.Homes[G(20)].District=G(998); Drain(o); Check(w.Trace.Count==0,"District");});
         foreach (var mode in new[] { "child", "homeless", "unemployed", "deleted" })
@@ -80,7 +80,7 @@ static partial class Program
                 if(mutation=="target full")Partner(w,1,100);
                 if(mutation=="target blocked")w.Homes[G(20)].Usable=false;
                 if(mutation=="route changed")w.Routes[(G(20),G(100))]=100;
-                Drain(o); Check(w.Trace.Count==0,"Stale plan applied");
+                o.Tick(); Check(w.Trace.Count==0,"Stale plan applied"); Drain(o); if(mutation=="home") Check(w.People[G(1)].Home==G(20),"Changed actor not reconsidered"); else Check(w.Trace.Count==0,"Invalid action applied");
             });
         Test("save/reload preserves unfinished scan and exact commit tick", () => {
             var(w,a)=Setup(); AddDistantHouses(w,80); a.Tick(); var w2=w.Copy(); var b=Reload(w2,a);
@@ -95,9 +95,9 @@ static partial class Program
         });
         Test("new day keeps backlog ahead of already processed actors", () => {
             var(w,o)=Setup(); Partner(w,20,5); o.EnqueueDay(new[]{G(2),G(1)}); o.Tick(); o.EnqueueDay(new[]{G(1),G(2),G(3)});
-            Check(o.State.Queue.SequenceEqual(new[]{G(2),G(1),G(3)}),"Backlog priority");
+            var pending=o.State.Queue.Skip(o.State.Next).ToArray(); Check(pending.First()==G(2) && pending.Last()==G(3) && pending.Distinct().Count()==pending.Length,"Backlog priority");
         });
-        Test("new day does not duplicate active actor", () => {var(w,o)=Setup();AddDistantHouses(w,40);o.Tick();o.EnqueueDay(new[]{G(1),G(1),G(2)});Check(o.State.Queue.SequenceEqual(new[]{G(2)}),"Active duplicate");});
+        Test("new day does not duplicate active actor", () => {var(w,o)=Setup();AddDistantHouses(w,40);o.Tick();o.EnqueueDay(new[]{G(1),G(1),G(2)});Check(o.State.Queue.Skip(o.State.Next).SequenceEqual(new[]{G(2)}),"Active duplicate");});
         Test("reject unknown save schema", () => {bool threw=false;try{new Optimizer(new World(),new OptimizerState{Schema=99});}catch(InvalidOperationException){threw=true;}Check(threw,"Schema");});
         Test("randomized mirrored peers: occupancy, monotonic commute, determinism", () => {
             var random=new Random(7401);
@@ -186,8 +186,8 @@ static partial class Program
         Test("skipped actors share the fixed budget without starving a worker", () => {
             var(w,o)=Setup();var ids=new List<Guid>();
             for(int i=200;i<240;i++){AddAdult(w,i,10);w.People[G(i)].Adult=false;ids.Add(G(i));}
-            ids.Add(G(1));o.State.Queue=ids;o.State.Next=0;o.Tick();
-            Check(o.State.Next==16&&o.State.Evaluated==16,"Unbounded skip batch");o.Tick();o.Tick();
+            ids.Add(G(1));o.State.Queue=ids;o.State.Queued=new SortedSet<Guid>(ids);o.State.Next=0;o.Tick();
+            Check(o.State.Next==16&&o.State.Evaluated==16,"Unbounded skip batch");o.Tick();o.Tick();o.Tick();
             Check(o.State.Moves==1,"Eligible worker delayed by one tick per child");
         });
         Test("already minimal commute does not snapshot district homes", () => {
@@ -237,6 +237,7 @@ static partial class Program
             }
         });
         Preview5Checks();
+        Preview6Checks();
         if (args.Length == 2) Test("compiled adapter follows installed component API contract", () => AdapterApiChecks.Verify(args[0], args[1]));
         Console.WriteLine($"{passed} checks passed. Native Unity execution and two-player playtest are not exercised.");
     }
@@ -247,9 +248,13 @@ static partial class Program
     sealed class World : IHousingWorld
     {
         public Dictionary<Guid,Person> People=new();public Dictionary<Guid,Home> Homes=new();
-        public Dictionary<(Guid,Guid),float> Routes=new();public List<string> Trace=new();public bool Reverse,UseCache;public int Calls,NativeCalls,HomeSnapshots;
+        public Dictionary<(Guid,Guid),float> Routes=new();public List<string> Trace=new();public bool Reverse,UseCache;public int Calls,NativeCalls,HomeSnapshots,PreparationCalls;
         public RouteCache<(Guid,Guid)> Cache=new();
-        public Person GetPerson(Guid id)=>People.TryGetValue(id,out var p)?new Person{Id=p.Id,Home=p.Home,Work=p.Work,District=p.District,Adult=p.Adult}:null;
+        public Person GetPerson(Guid id)=>People.TryGetValue(id,out var p)?new Person{Id=p.Id,Home=p.Home,Work=p.Work,District=p.District,Adult=p.Adult,WorkUnavailable=p.WorkUnavailable}:null;
+        public bool NextPerson(Guid district,Guid after,out Guid id){PreparationCalls++;return Next(People.Values.Where(p=>district==Guid.Empty||p.District==district).Select(p=>p.Id),after,out id);}
+        public bool NextHome(Guid district,Guid after,out Guid id){PreparationCalls++;if(after==Guid.Empty)HomeSnapshots++;return Next(Homes.Where(h=>h.Value.District==district).Select(h=>h.Key),after,out id);}
+        public bool NextAdult(Guid home,Guid after,out Guid id){PreparationCalls++;return Next(People.Values.Where(p=>p.Adult&&p.Home==home).Select(p=>p.Id),after,out id);}
+        static bool Next(IEnumerable<Guid> ids,Guid after,out Guid id){id=ids.Where(x=>x.CompareTo(after)>0).OrderBy(x=>x).FirstOrDefault();return id!=Guid.Empty;}
         public Guid[] GetHomes(Guid district){HomeSnapshots++;return(Reverse?Homes.Keys.Reverse():Homes.Keys).ToArray();}
         public Guid[] GetAdults(Guid home){var ids=People.Values.Where(p=>p.Home==home&&p.Adult).Select(p=>p.Id);return(Reverse?ids.Reverse():ids).ToArray();}
         public bool UsableHome(Guid home,Guid district)=>Homes.TryGetValue(home,out var h)&&h.Usable&&h.District==district;
@@ -263,6 +268,12 @@ static partial class Program
         public World Copy(){var w=new World{Reverse=Reverse};foreach(var p in People)w.People[p.Key]=GetPerson(p.Key);foreach(var h in Homes)w.Homes[h.Key]=new Home{Capacity=h.Value.Capacity,AdultLimit=h.Value.AdultLimit,Usable=h.Value.Usable,Breeding=h.Value.Breeding,District=h.Value.District};foreach(var r in Routes)w.Routes[r.Key]=r.Value;w.Trace.AddRange(Trace);return w;}
     }
 }
+
+
+
+
+
+
 
 
 

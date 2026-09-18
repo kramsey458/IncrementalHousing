@@ -1,130 +1,127 @@
-# Incremental Housing — Preview 5
+# Incremental Housing — Preview 6
 
-Standalone Timberborn 1.1 mod, built against **1.1.2.4**. Version **0.4.0**.
+Standalone Timberborn 1.1 mod, built against **1.1.2.4**. Version **0.5.0**.
 Gradually improves home-to-assigned-workplace commutes while protecting breeding capacity.
 
 ## Installation
 
-1. Close Timberborn. Extract `IncrementalHousing-preview5.zip` into `Documents/Timberborn/Mods`.
+1. Close Timberborn. Extract `IncrementalHousing-preview6.zip` into `Documents/Timberborn/Mods`.
    The ZIP contains an `IncrementalHousing-Preview` folder. Existing users can overwrite that folder.
-2. Launch Timberborn, enable **Incremental Housing - Preview 0.4.0**, and restart.
-3. Load a copy of your save. New queues start at daytime start; saved queues resume on load.
+2. Launch Timberborn, enable **Incremental Housing - Preview 0.5.0**, and restart.
+3. Load a copy of your save. New daily sweeps start at daytime start; saved work resumes on load.
+   Relevant live changes can also queue work before the next morning.
 
 Standalone: no additional mod dependencies. Both multiplayer players must install the identical package.
 
-## What changed in Preview 5
+**Save compatibility:** schemas 1 and 2 migrate to schema 3. Pending actors are retained; an older
+unfinished search is requeued and its obsolete caches are discarded. Keep an original save copy.
+Do not downgrade a save written by Preview 6.
 
-- **Rechecked alternatives:** retain the 16 highest-scoring candidates, then score them again over
-  budgeted steps before selecting a winner. A stale winner can fall back to a better valid candidate.
-  Detected changes during validation restart that validation. The selected action is checked once more
-  immediately before applying it. This does not guarantee the best current candidate outside the shortlist.
-- **Less repeated work:** share sorted district-home snapshots and workplace minimum-route information.
-  An actor already at a surveyed workplace minimum skips the full house scan. No-improvement searches
-  back off for up to three daytime passes, unless their assignment changes or a tracked world change
-  invalidates them. Daily passes refresh shared home, resident-group and minimum-route data.
-- **Equivalent partners grouped:** build resident groups incrementally, one resident per work step,
-  keeping the lowest eligible entity ID for each workplace. Reuse completed groups between searches.
-  Coworkers offer no net improvement in a two-person swap. Group construction still has a cold-start cost;
-  the gain comes from reuse, not moving an unbounded group scan into a single tick.
-- **Combined swap threshold:** a swap may qualify when each worker saves less than 0.5 individually,
-  provided the initiating worker improves and combined savings exceed 0.5. Direct moves still need more
-  than 0.5 savings. A zero-cost initiating commute skips the scan.
-- **Incremental cache eviction:** the 8,192-entry route cache uses FIFO eviction, removing one old entry
-  per new insertion at capacity. Updating an entry does not duplicate its eviction record.
-- **Bounded rotations and vacancy chains:** if simple moves/swaps produce no valid candidate, try
-  two-adult vacancy chains and three-adult rotations. Retain at most eight stable seed partners and spend
-  at most 256 extended exploration steps per actor, followed by bounded shortlist validation. The home
-  starting offset rotates between searches. This is a limited escape from pairwise local optima, not an
-  exhaustive colony-wide assignment solver. A cold group too large for this budget can limit coverage.
+## Changes in Preview 6
 
-The test runner also now catches failures, prints diagnostics and exits with a normal nonzero code.
-It no longer leaves ordinary failed assertions as unhandled exceptions for Windows crash reporting.
+- **Fairer extended search.** Retain all eligible seed partners, in deterministic order, rather than
+  only the first eight IDs. A saved cursor tracks the home, seed and last evaluated resident across
+  search passes. Visit seed partners for each home before advancing to the next home. Large resident
+  groups are prepared incrementally and retained, so they can finish across multiple search budgets.
+  The limit remains **256 extended exploration steps per search**, followed by bounded validation.
+- **Targeted invalidation.** Household and job events invalidate resident groups for the affected
+  homes and resting/validation decisions for their district. Unrelated districts, home lists and
+  route minima remain reusable. Building additions/removals invalidate that district's home list.
+  Navigation updates still conservatively invalidate planner/route data globally.
+- **Same-day reconsideration.** Changed workers enter a deduplicated priority queue. Affected
+  districts and navigation changes trigger incremental rechecks, including after the daily queue
+  has drained. Priority admissions alternate with regular work, and district/global/daily enumeration
+  rotates so recurring events do not monopolize queue preparation.
+- **Assigned jobs remain assigned.** Paused or automated-off workplaces are no longer converted
+  into unemployment for commute scoring. When their access remains valid, the assigned route counts.
+  A disabled or cross-district assigned job excludes its worker from a plan instead of scoring it
+  as an unemployed zero-cost partner. Physically blocked/unreachable destinations still need a valid
+  route before any move can be accepted.
+- **Disconnected commute recovery.** A housed adult with a usable home but no route to its assigned
+  workplace can move to reachable housing. Recovery may also use a safe swap, chain or rotation,
+  provided every other employed participant has valid before/after routes and none gets a longer
+  commute. Invalid numeric scores are rejected; they are not treated as disconnected routes.
+- **Incremental preparation.** Saved ordered catalogs replace daily full population enumeration
+  and sorting. Daily queue construction, home-list preparation and resident-group preparation consume
+  work steps. Deleted people/homes are removed from the catalogs and event subscriptions. Catalog
+  traversal uses binary search: Timberborn's Mono implementation of sorted-set range views performs
+  a hidden full-range count, so it is deliberately avoided.
 
-## Route scoring and breeding rules
+Diagnostics remain small: existing move/swap/chain/rotation counters plus a recovery count in saved
+state. There is no telemetry service, per-tick logging or new diagnostic UI. The test runner catches
+failures, reports them and exits normally; no test executable is included in the install ZIP.
 
-Use Timberborn's **zipline-aware road-route cost**, returned by `Accessible.FindRoadPath`. This follows
-real navigation routes and includes zipline speed weighting; it is not straight-line distance, literal
-meters walked, congestion or a full-day travel-time model. There is no straight-line fallback.
+## Commute and breeding rules
 
-All actions must reduce combined assigned-workplace commute cost by more than **0.5**. The initiating
-adult must improve. Other participating adults may lose some convenience if the combined gain remains
-positive. A chain can move an otherwise stationary partner into a vacancy to free the actor's destination.
+Use Timberborn's **zipline-aware road-route cost**, returned by `Accessible.FindRoadPath`.
+This follows real navigation routes and includes zipline speed weighting. It is not straight-line
+distance, literal meters walked, congestion or a full-day travel-time model.
 
-Only housed, employed adults initiate searches. Unemployed adults can be partners at zero assigned-work
-cost. Children never move. Unreachable routes, invalid distances, unusable buildings and cross-district
-assignments are excluded. Disabled/paused workplaces retain the previous behavior of being excluded
-from the commute objective; temporarily inactive jobs are not modeled as future commutes.
+Ordinary moves must improve the initiating adult's commute and reduce combined cost by more than
+**0.5**. Other participants may lose convenience if the total saving exceeds that threshold.
+Disconnected-route recovery is a separate objective: restoring the actor's route takes priority,
+with no worsening permitted for the other participants. Recovery candidates are scored again before
+commit; a route that returns during planning is evaluated under the ordinary saving rule.
 
-For breeding houses, reserve `max(0, min(child slots, floor(adults / 2)) - children)` empty beds after
-an incoming adult. Existing children already occupy those slots. Child-only houses have no pairs to
-reserve for. Non-breeding houses may use any free bed.
+Only housed adults with assigned workplaces initiate searches. Truly unemployed adults can be
+partners at zero assigned-work cost. Children never move. Homes must be usable and in the same district.
+The mod does not evacuate blocked homes or house homeless beavers.
 
-Direct moves and vacancy chains cannot reduce combined adult-pair count or remaining newborn capacity
-at their source and final destination. A chain's intermediate home retains its adult count. Swaps and
-three-way rotations preserve each affected home's adult and child counts. Forming pairs cannot override
-the commute-saving requirement. These are structural safeguards, not a population-recovery guarantee.
+For breeding houses, reserve `max(0, min(child slots, floor(adults / 2)) - children)` empty beds
+after an incoming adult. Children already occupy their slots; child-only homes have no pairs to
+reserve for. Direct moves and vacancy chains cannot reduce combined adult-pair count or remaining
+newborn capacity at their source and final destination. Swaps and rotations preserve each home's
+adult and child counts. These are structural safeguards, not a population-recovery guarantee.
 
-Existing residents keep their homes during planning. Applying a swap/rotation/chain frees the involved
-adult beds and assigns participants synchronously within one simulation tick. There is no daily eviction.
+Residents keep their homes while planning. The selected move, swap or rotation applies synchronously
+within one simulation tick. Candidates are revalidated, including capacity, participants and routes.
 
-## Scheduling, invalidation and multiplayer
+## Scheduling and multiplayer
 
-- **16 work steps per simulation tick**, at most one completed actor per tick. Steps include actor
-  admission, home exploration, resident-group preparation, partner evaluation and shortlist validation.
-  Larger searches continue across ticks. Three-person scoring raises the maximum planner distance
-  lookups to **96 per tick**; most steps need fewer. One lookup can visit multiple workplace access points.
-- Pending queue work retains priority at daytime start. Entity IDs provide stable ordering and ties.
-  No random, frame-time, elapsed-time or cache-warmth decision rules are used.
-- Completed scans, house snapshots, groups, minimum-route bounds, shortlists, phase/cursors, pending
-  invalidation, fallback days and extension offsets are saved. Schema 1 saves migrate to schema 2;
-  the old active actor is requeued without changing its home. Do not downgrade a save written by Preview 5.
-- Live road/zipline navigation updates, observed job changes, home changes, migration, deaths and dwelling
-  population changes invalidate shared planner data for the next tick. The current scan retains its
-  snapshots and uses end-of-scan revalidation. Detected changes reset resting-search suppression.
-  A drained queue is reconsidered at the next daytime pass; changes do not run an unlimited immediate scan.
-- Event-observer membership is saved in sorted ID sets and restored after scene loading, so a joining peer
-  tracks the same known entities. Newly evaluated actors/homes are subscribed as they are discovered.
-  Periodic fallback covers changes not yet observed and building eligibility changes without a road update.
-- Successful single-access routes are shared across workers. Cross-tick reuse validates endpoint existence,
-  usability, blocking and exact coordinates. Committed navigation changes, daytime start and load clear
-  route data. Multi-access workplaces use the native minimum-over-accesses query with tick-local caching.
-  Failed routes are not retained across ticks. Route-cache warmth does not control planner step counts.
+- **16 work steps per simulation tick**, at most one completed actor per tick. This includes queue
+  enumeration, actor admission, home/resident preparation, candidate scoring and revalidation.
+  Three-person scoring uses at most six planner distance lookups per step, **96 per tick**.
+- Queue membership, preparation progress, extended-search cursors, priority requests and catalog
+  memberships are saved. Canonically ordered maps ensure identical serialized state after reload.
+  No frame-time, stopwatch or route-cache-warmth rule controls planning decisions.
+- Failed searches rest until three daytime passes after their evaluation, unless relevant changes
+  invalidate them. Workplace route minima expire by day; completed resident groups refresh after
+  more than three days. Unfinished group preparation survives that refresh interval.
+- Existing pending work is retained across mornings. A changed active assignment cancels the old
+  search and requeues that worker. A finite shortlist cannot guarantee the best currently available
+  alternative outside the retained 16 candidates.
+- The 8,192-entry successful-route cache evicts one entry at a time. Endpoint identity, coordinates
+  and blocking are checked. Navigation updates, daytime start and load clear route data.
+  Multi-access workplaces use the game's native query with tick-local caching.
+- Observer subscriptions restore after scene initialization, before simulation resumes. New people
+  and committed housing changes update the catalogs through game lifecycle events.
 
-Snapshots/sorting, daily queue construction, initial observer registration and a cold native path query
-are not individually time-sliced. Group preparation is time-sliced after its resident-ID snapshot.
-Any tracked change currently invalidates shared planner data globally; busy colonies can reduce reuse.
-The fixed step budget controls work quantity, not a hard milliseconds or FPS guarantee.
+The budget limits operations, **not milliseconds**. Initial catalog construction/subscription restore
+happens during loading; a newly finished district may also need initial registration. Ordered catalog
+membership changes can shift ID arrays. Collection growth, save serialization and a cold native path
+query are not hard time-bounded. Event activity and larger populations can still increase total work.
 
-## Validation and measured examples
+This remains a local optimizer. Extended searches can take multiple daily passes; changing colonies,
+longer cycles, mobile work sites and non-work travel can prevent or fall outside the best assignment.
 
-**84 checks passed**, including the compiled-adapter check against the installed game's real component
-blacklist. Release build: zero warnings/errors. The Preview 4 `AllComponents` crash fix is retained.
-Tests cover direct/swapped/chained/rotated moves, reserved beds, invalid routes, changing participants,
-old-save migration, cache eviction, periodic fallback and save/load at intermediate search boundaries.
-Mirrored random worlds test deterministic states/actions and non-increasing total commute costs.
+## Validation
 
-Synthetic audit results:
+**109 checks passed**, including the compiled adapter against the installed game's component blacklist
+and its use of the assigned-workplace API. Release build: zero warnings/errors.
 
-| Fixture | Preview 4 | Preview 5 |
-|---|---:|---:|
-| Stable 200-worker, 80-home district: planner ticks | 1,200 | 19 |
-| Same district: home snapshots | 200 | 1 |
-| Same district: distance lookups | 31,800 | 358 |
-| Stale winner: final commute when alternative costs 5 | 19 or 20 | 5 |
-| Two workers each able to save 0.4: combined cost | 20 | 19.2 |
-| Three-worker rotation fixture: combined cost | 60 | 30 |
-| Useful old entries retained after cache overflow | 0 of 8,191 | 8,191 of 8,191 |
-| 100 six-worker synthetic layouts: above exact global optimum | 31 | 9 |
+Coverage includes ordinary and recovery moves, breeding/child-space safeguards, unavailable jobs,
+same-day queue wakeups, scoped invalidation, queue fairness, incremental preparation, large resident
+groups, late seed coverage, old-save migration and exact save/reload state/action replay.
 
-The six-worker comparison enumerates all 720 assignments per layout. Mean gap across those layouts
-fell from 1.97% to 0.28%; worst gap fell from 19.48% to 12.35%. These small generated fixtures are not
-representative gameplay benchmarks. Native Unity path time, FPS and live two-player behavior remain
-**untested**. Static inspection of lifecycle APIs does not replace a live rehost/join test.
+A controlled fixture with eight unhelpful early seeds and a useful ninth seed now finds the rotation
+within four daily passes, reducing combined route cost **220 to 190**. This verifies improved search
+coverage; it is not an in-game FPS measurement or a guarantee for every colony.
+The stable 200-worker/80-home fixture makes **358 planner distance lookups**. Home preparation is now
+spread across ticks, so that fixture takes 24 planner ticks instead of Preview 5's 19.
 
-For live testing, use a copy of a save; exercise job changes, births, roads/ziplines, vacancy chains,
-full-home rotations and joining/rehosting during a scan. Compare both peers' assignments and logs.
-Vanilla housing can subsequently move residents. Longer cycles, future jobs, mobile work sites,
-non-work travel and happiness remain outside the objective.
+Native Unity gameplay and live two-player join/rehost testing remain **untested**. Use a copy of a save
+to test job changes, births/deaths, housing construction, paused jobs, disconnected roads/ziplines,
+recovery moves and joining during a partially completed scan.
 
 ## Build and test
 
@@ -137,9 +134,9 @@ dotnet run --project IncrementalHousing.Tests -c Release -- IncrementalHousing/b
 ```
 
 The tests' Newtonsoft.Json HintPath defaults to the standard Steam installation; adjust it if needed.
-Omitting the two test arguments runs the 83 planner/cache checks without the compiled-adapter check.
-Packaging writes installer/source ZIPs and notes/checksums to `dist`; move existing archives aside before
-repackaging. The test executable is not included in the install ZIP.
+Omitting the two test arguments runs 108 planner/catalog/cache checks without the compiled-adapter check.
+Packaging writes installer/source ZIPs and notes/checksums to `dist`; move existing archives aside
+before repackaging.
 
-To uninstall, disable this mod and restart. Beavers retain normal game home assignments. Keep an original
-save copy to undo moves already made or to return to an older mod version.
+To uninstall, disable this mod and restart. Beavers retain normal game home assignments. Keep an
+original save copy to undo moves already made or to return to an older mod version.

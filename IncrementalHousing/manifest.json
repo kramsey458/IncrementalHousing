@@ -1,11 +1,12 @@
 {
   "Name": "Incremental Housing - Preview",
-  "Version": "0.4.0",
+  "Version": "0.5.0",
   "Id": "Kyler.IncrementalHousing",
   "MinimumGameVersion": "1.1.0.0",
   "Description": "Standalone housing optimizer that gradually improves zipline-aware home-to-work route cost with beneficial moves and swaps. Fixed work budget per simulation tick. No additional mod dependencies. For multiplayer, install the same version on both computers.",
   "RequiredMods": []
 }
+
 
 
 

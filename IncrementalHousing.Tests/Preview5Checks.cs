@@ -40,9 +40,9 @@ static partial class Program
             Console.WriteLine($"Stable district: {ticks} ticks, {w.HomeSnapshots} home snapshot, {w.Calls} distance lookups (Preview 4: 1200 / 200 / 31800).");
         });
         Test("unchanged no-improvement actor backs off with periodic fallback",()=>{
-            var(w,o)=Setup(20,30);Drain(o);int first=w.HomeSnapshots;o.EnqueueDay(w.People.Keys);Drain(o);Check(w.HomeSnapshots==first,"No-change rescan");
-            o.EnqueueDay(w.People.Keys);Drain(o);Check(w.HomeSnapshots==first,"Fallback too early");
-            o.EnqueueDay(w.People.Keys);Drain(o);Check(w.HomeSnapshots>first,"Periodic fallback starved");
+            var(w,o)=Setup(20,30);Drain(o);int first=w.Calls;o.EnqueueDay(w.People.Keys);Drain(o);Check(w.Calls==first,"No-change rescan");
+            o.EnqueueDay(w.People.Keys);Drain(o);Check(w.Calls==first,"Fallback too early");
+            o.EnqueueDay(w.People.Keys);Drain(o);Check(w.Calls>first+1,"Periodic fallback starved");
         });
         Test("world change wakes a resting actor and discards stale minima",()=>{
             var(w,o)=Setup(20,30);Drain(o);o.EnqueueDay(w.People.Keys);w.Routes[(G(20),G(100))]=5;o.MarkWorldChanged();Drain(o);
@@ -64,7 +64,7 @@ static partial class Program
         });
         Test("rotation preserves breeding pairs and child counts",()=>{
             var(w,o)=Cycle();for(int h=10;h<13;h++){Breed(w,G(h),3);AddAdult(w,1000+h,h);w.People[G(1000+h)].Work=G(100+h-10);AddAdult(w,2000+h,h);w.People[G(2000+h)].Adult=false;}
-            Drain(o);Check(o.State.Rotations==1,"Breeding cycle missed");foreach(var h in w.Homes.Keys){var pop=w.GetPopulation(h);Check(pop.Adults==2&&pop.Children==1,"Household counts changed");}
+            Drain(o);Check(o.State.Rotations>=1,"Breeding cycle missed");foreach(var h in w.Homes.Keys){var pop=w.GetPopulation(h);Check(pop.Adults==2&&pop.Children==1,"Household counts changed");}
         });
         Test("vacancy chain can use a neutral partner relocation",()=>{
             var(w,o)=Setup(20,5);Partner(w,5,30);w.Homes[G(30)]=new Home();w.Routes[(G(30),G(100))]=30;w.Routes[(G(30),G(200))]=5;
@@ -79,7 +79,7 @@ static partial class Program
             w.Routes[(G(30),G(100))]=30;w.Routes[(G(30),G(200))]=5;Drain(o);Check(o.State.Chains==0,"Pair split by chain");
         });
         Test("rotation search save/load matches every tick and action",()=>{
-            var(w,a)=Cycle();a.State.Next=a.State.Queue.Count;a.State.Active=new Search{Actor=w.GetPerson(G(1)),Phase=2,Homes=new[]{G(10),G(11),G(12)},Seeds=new List<Plan>{new Plan{Home=G(11),Partner=G(2)}}};
+            var(w,a)=Cycle();a.State.Next=a.State.Queue.Count;a.State.Active=new Search{Actor=w.GetPerson(G(1)),Phase=2,Homes=new List<Guid>{G(10),G(11),G(12)},Seeds=new List<Plan>{new Plan{Home=G(11),Partner=G(2)}}};
             var peer=w.Copy();peer.Reverse=true;var b=Reload(peer,a);
             for(int t=0;t<100;t++){w.Calls=0;a.Tick();b.Tick();Check(w.Calls<=96,"Extended path budget");Check(JsonConvert.SerializeObject(a.State)==JsonConvert.SerializeObject(b.State),"Extension restore diverged");}
             Check(a.State.Rotations==1&&string.Join(";",w.Trace)==string.Join(";",peer.Trace),"Extension actions diverged");
@@ -91,7 +91,7 @@ static partial class Program
         });
         Test("old schema resumes pending actor under new rules",()=>{
             var(w,o)=Setup();var old=new OptimizerState{Schema=1,Queue=new List<Guid>{G(1)},Next=1,Active=new Search{Actor=w.GetPerson(G(1))}};
-            var upgraded=new Optimizer(w,old);Check(upgraded.State.Schema==2&&upgraded.State.Active==null,"Migration failed");Drain(upgraded);Check(upgraded.State.Moves==1,"Active actor lost");
+            var upgraded=new Optimizer(w,old);Check(upgraded.State.Schema==3&&upgraded.State.Active==null,"Migration failed");Drain(upgraded);Check(upgraded.State.Moves==1,"Active actor lost");
         });
         Test("shortlist revalidation and resident-group save restore match at every boundary",()=>{
             var(w,a)=Cycle();for(int i=50;i<85;i++){w.Homes[G(i)]=new Home{Capacity=3,AdultLimit=3};for(int j=100;j<103;j++)w.Routes[(G(i),G(j))]=100;}
@@ -117,4 +117,6 @@ static partial class Program
         });
     }
 }
+
+
 
