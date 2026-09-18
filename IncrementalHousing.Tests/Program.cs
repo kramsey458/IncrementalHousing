@@ -27,7 +27,7 @@ static class Program
         Check(limit > 0, "Queue did not drain");
     }
     static Optimizer Reload(World w, Optimizer o) => new Optimizer(w, JsonConvert.DeserializeObject<OptimizerState>(JsonConvert.SerializeObject(o.State)));
-    static void Main()
+    static void Main(string[] args)
     {
         Test("vacant bed shortens commute without evicting unrelated residents", () => {
             var (w,o)=Setup(); w.Homes[G(20)].Capacity=2; w.Homes[G(20)].AdultLimit=2; Partner(w,5,30); Drain(o);
@@ -225,6 +225,7 @@ static class Program
                 }
             }
         });
+        if (args.Length == 2) Test("compiled adapter follows installed component API contract", () => AdapterApiChecks.Verify(args[0], args[1]));
         Console.WriteLine($"{passed} checks passed. Native Unity execution and two-player playtest are not exercised.");
     }
     static void AddDistantHouses(World w,int count){for(int i=30;i<30+count;i++){w.Homes[G(i)]=new Home();w.Routes[(G(i),G(100))]=100;}}

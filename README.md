@@ -1,15 +1,23 @@
-# Incremental Housing — Preview 3
+# Incremental Housing — Preview 4
 
-[Download Preview 3](https://github.com/kramsey458/IncrementalHousing/releases/tag/v0.3.0-preview.3)
+[Download Preview 4](https://github.com/kramsey458/IncrementalHousing/releases/tag/v0.3.1-preview.4)
 
-Standalone Timberborn 1.1 mod, built against game **1.1.2.4**. Version **0.3.0**.
+Standalone Timberborn 1.1 mod, built against game **1.1.2.4**. Version **0.3.1**.
 Gradually reduces home-to-assigned-workplace commute cost through beneficial moves and swaps.
+
+## Crash hotfix
+
+Preview 4 fixes the September 18 crash in `HousingService.GetPopulation`. Timberborn forbids
+`GetComponents<BaseComponent>` at runtime. Breeding detection now enumerates the supported
+`BaseComponent.AllComponents` collection, avoiding that exception without changing housing rules.
+The new compiled-adapter check rejects the Preview 3 DLL with the reported exception and accepts
+the fixed DLL against the installed game's real component blacklist. Full Unity gameplay remains untested.
 
 ## Installation
 
-1. Close Timberborn. Extract `IncrementalHousing-preview3.zip` into `Documents/Timberborn/Mods`.
+1. Close Timberborn. Extract `IncrementalHousing-preview4.zip` into `Documents/Timberborn/Mods`.
    The ZIP contains an `IncrementalHousing-Preview` folder.
-2. Launch Timberborn and enable **Incremental Housing - Preview 0.3.0** in the mod manager.
+2. Launch Timberborn and enable **Incremental Housing - Preview 0.3.1** in the mod manager.
 3. Restart the game, then load a copy of your save.
 4. Processing starts at the next daytime-start event. A saved queue resumes immediately on load.
 
@@ -81,7 +89,7 @@ outside the objective. No FPS or milliseconds improvement is claimed without liv
 
 ## Validation
 
-Release build against installed game assemblies: zero warnings and errors. **58 automated checks**
+Release build against installed game assemblies: zero warnings and errors. **59 checks (58 planner checks plus one compiled-adapter API check)**
 cover harmful/beneficial moves and swaps, breeding safeguards, stale saved plans, route changes,
 queue fairness, deterministic ties, save/load and cache behavior. Randomized mirrored peers cover
 40 non-breeding layouts across three daily passes, plus 40 breeding layouts. Tests assert identical
@@ -104,7 +112,7 @@ Requires .NET SDK 8 and a local Timberborn installation. No NuGet packages requi
 
 ```powershell
 dotnet build IncrementalHousing/IncrementalHousing.csproj -c Release -p:GameManaged="C:\path\Timberborn_Data\Managed"
-dotnet run --project IncrementalHousing.Tests -c Release
+dotnet run --project IncrementalHousing.Tests -c Release -- IncrementalHousing/bin/Release/netstandard2.1/IncrementalHousing.dll "C:\path\Timberborn_Data\Managed"
 ./package.ps1
 ```
 

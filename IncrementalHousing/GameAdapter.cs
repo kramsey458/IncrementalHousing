@@ -32,7 +32,7 @@ public sealed class HousingConfigurator : Configurator
 
 public sealed class ModStarter : IModStarter
 {
-    public void StartMod(IModEnvironment environment) => Debug.Log("[IncrementalHousing] Preview 3 loaded.");
+    public void StartMod(IModEnvironment environment) => Debug.Log("[IncrementalHousing] Preview 4 (0.3.1) loaded.");
 }
 
 public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITickableSingleton, IHousingWorld, ISingletonNavMeshListener
@@ -49,7 +49,6 @@ public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITi
     // Tick-local only: warm/cold caches cannot affect the candidate budget or saved cursor.
     private readonly Dictionary<(Guid, Guid), (bool, float)> _distances = new Dictionary<(Guid, Guid), (bool, float)>();
     private readonly RouteCache<(Guid, Guid, Vector3, Vector3)> _routes = new RouteCache<(Guid, Guid, Vector3, Vector3)>();
-    private readonly List<BaseComponent> _components = new List<BaseComponent>();
     private readonly Dictionary<Guid, HousingPopulation> _populations = new Dictionary<Guid, HousingPopulation>();
 
     public HousingService(EventBus events, DistrictCenterRegistry districts, EntityRegistry entities,
@@ -162,10 +161,10 @@ public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITi
         bool breeding = false;
         // The game's ProcreationHouse type is internal. Inspect component identity without
         // publicizing game assemblies or invoking private methods. Cache only for this tick.
-        _components.Clear();
-        home.GetComponents(_components);
-        foreach (var component in _components)
-            if (component.GetType().FullName == "Timberborn.Reproduction.ProcreationHouse") { breeding = true; break; }
+        // BaseComponent is blacklisted by GetComponents<T> at runtime, even though
+        // that call compiles. AllComponents is the supported untyped enumeration.
+        foreach (var component in home.AllComponents)
+            if (component != null && component.GetType().FullName == "Timberborn.Reproduction.ProcreationHouse") { breeding = true; break; }
         var population = new HousingPopulation { Adults = home.NumberOfAdultDwellers, Children = home.NumberOfChildDwellers,
             Capacity = home.MaxBeavers, ChildSlots = home.ChildSlots, Breeding = breeding };
         _populations[homeId] = population;
