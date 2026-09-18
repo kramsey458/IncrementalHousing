@@ -8,6 +8,7 @@ public sealed class RouteCache<TKey>
 {
     private readonly int _capacity;
     private readonly Dictionary<TKey, float> _entries = new Dictionary<TKey, float>();
+    private readonly Queue<TKey> _insertionOrder = new Queue<TKey>();
     public int Count => _entries.Count;
     public RouteCache(int capacity = 8192)
     {
@@ -18,8 +19,12 @@ public sealed class RouteCache<TKey>
     public void Store(TKey key, float cost)
     {
         if (cost < 0 || float.IsNaN(cost) || float.IsInfinity(cost)) return;
-        if (_entries.Count >= _capacity && !_entries.ContainsKey(key)) _entries.Clear();
+        if (!_entries.ContainsKey(key))
+        {
+            if (_entries.Count >= _capacity) _entries.Remove(_insertionOrder.Dequeue());
+            _insertionOrder.Enqueue(key);
+        }
         _entries[key] = cost;
     }
-    public void Clear() => _entries.Clear();
+    public void Clear() { _entries.Clear(); _insertionOrder.Clear(); }
 }

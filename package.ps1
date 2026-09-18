@@ -33,7 +33,7 @@ $payload = [ordered]@{
     'IncrementalHousing-Preview/README.md' = (Join-Path $modDir 'README.md')
     'IncrementalHousing-Preview/LICENSE' = (Join-Path $modDir 'LICENSE')
 }
-Write-Archive (Join-Path $outDir 'IncrementalHousing-preview4.zip') $payload
+Write-Archive (Join-Path $outDir 'IncrementalHousing-preview5.zip') $payload
 $sources = [ordered]@{}
 foreach ($directory in @($modDir, $testDir)) {
     foreach ($file in Get-ChildItem -LiteralPath $directory -File | Sort-Object Name) {
@@ -42,13 +42,14 @@ foreach ($directory in @($modDir, $testDir)) {
     }
 }
 $sources['package.ps1'] = $PSCommandPath
-Write-Archive (Join-Path $outDir 'IncrementalHousing-preview4-source.zip') $sources
-Copy-Item -LiteralPath (Join-Path $modDir 'README.md') -Destination (Join-Path $outDir 'IncrementalHousing-preview4-notes.md')
-$checksums = foreach ($file in Get-ChildItem -LiteralPath $outDir -Filter 'IncrementalHousing-preview4*.zip' | Sort-Object Name) {
+Write-Archive (Join-Path $outDir 'IncrementalHousing-preview5-source.zip') $sources
+Copy-Item -LiteralPath (Join-Path $modDir 'README.md') -Destination (Join-Path $outDir 'IncrementalHousing-preview5-notes.md')
+$checksums = foreach ($file in Get-ChildItem -LiteralPath $outDir -Filter 'IncrementalHousing-preview5*.zip' | Sort-Object Name) {
     '{0}  {1}' -f (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $file.Name
 }
-$checksums | Set-Content -LiteralPath (Join-Path $outDir 'IncrementalHousing-preview4-SHA256SUMS.txt')
+$checksums | Set-Content -LiteralPath (Join-Path $outDir 'IncrementalHousing-preview5-SHA256SUMS.txt')
 $checksums
+
 
 
 

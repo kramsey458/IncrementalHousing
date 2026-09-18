@@ -15,6 +15,7 @@ using Timberborn.Modding;
 using Timberborn.ModManagerScene;
 using Timberborn.Navigation;
 using Timberborn.Persistence;
+using Timberborn.SceneLoading;
 using Timberborn.SingletonSystem;
 using Timberborn.TickSystem;
 using Timberborn.TimeSystem;
@@ -32,10 +33,10 @@ public sealed class HousingConfigurator : Configurator
 
 public sealed class ModStarter : IModStarter
 {
-    public void StartMod(IModEnvironment environment) => Debug.Log("[IncrementalHousing] Preview 4 (0.3.1) loaded.");
+    public void StartMod(IModEnvironment environment) => Debug.Log("[IncrementalHousing] Preview 5 (0.4.0) loaded.");
 }
 
-public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITickableSingleton, IHousingWorld, ISingletonNavMeshListener
+public sealed class HousingService : ILoadableSingleton, IUnloadableSingleton, ISaveableSingleton, ITickableSingleton, IHousingWorld, ISingletonNavMeshListener
 {
     private static readonly SingletonKey SaveKey = new SingletonKey("IncrementalHousing");
     private static readonly PropertyKey<string> StateKey = new PropertyKey<string>("State");
@@ -44,17 +45,22 @@ public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITi
     private readonly EntityRegistry _entities;
     private readonly ISingletonLoader _loader;
     private readonly ModRepository _mods;
+    private readonly LoadingScreen _loadingScreen;
     private Optimizer _optimizer;
     private bool _disabled;
+    private bool _watching;
+    private readonly HashSet<Guid> _watchedPeople = new HashSet<Guid>();
+    private readonly HashSet<Guid> _watchedHomes = new HashSet<Guid>();
     // Tick-local only: warm/cold caches cannot affect the candidate budget or saved cursor.
     private readonly Dictionary<(Guid, Guid), (bool, float)> _distances = new Dictionary<(Guid, Guid), (bool, float)>();
     private readonly RouteCache<(Guid, Guid, Vector3, Vector3)> _routes = new RouteCache<(Guid, Guid, Vector3, Vector3)>();
     private readonly Dictionary<Guid, HousingPopulation> _populations = new Dictionary<Guid, HousingPopulation>();
 
     public HousingService(EventBus events, DistrictCenterRegistry districts, EntityRegistry entities,
-        ISingletonLoader loader, ModRepository mods)
+        ISingletonLoader loader, ModRepository mods, LoadingScreen loadingScreen)
     {
         _events = events; _districts = districts; _entities = entities; _loader = loader; _mods = mods;
+        _loadingScreen = loadingScreen;
     }
 
     public void Load()
@@ -70,6 +76,7 @@ public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITi
         if (_loader.TryGetSingleton(SaveKey, out var saved))
             state = JsonConvert.DeserializeObject<OptimizerState>(saved.Get(StateKey));
         _optimizer = new Optimizer(this, state);
+        _loadingScreen.LoadingScreenDisabled += Ready;
         if (!_disabled) _events.Register(this);
     }
 
@@ -89,9 +96,30 @@ public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITi
     public void Tick()
     {
         if (_disabled) return;
+        if (!_watching) Ready(this, EventArgs.Empty);
         _distances.Clear();
         _populations.Clear();
         _optimizer.Tick();
+    }
+
+    public void Unload() => _loadingScreen.LoadingScreenDisabled -= Ready;
+
+    private void Ready(object sender, EventArgs args)
+    {
+        if (_disabled) return;
+        // SceneLoader hides the loading screen after scene initialization and before
+        // simulation resumes. Subscribe here, not after other services' first tick.
+        // Restore the saved membership without treating load events as world changes.
+        if (!_watching)
+        {
+            if (_optimizer.State.WatchersInitialized)
+            {
+                foreach (var id in new List<Guid>(_optimizer.State.ObservedPeople)) { var p = Component<Beaver>(id); if (p) WatchPerson(p); }
+                foreach (var id in new List<Guid>(_optimizer.State.ObservedHomes)) { var h = Component<Dwelling>(id); if (h) WatchHome(h); }
+            }
+            else { WatchPopulation(); _optimizer.State.WatchersInitialized = true; }
+            _watching = true;
+        }
     }
 
     // Regular, committed navigation updates include added/removed/blocked road
@@ -100,12 +128,43 @@ public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITi
     {
         _routes.Clear();
         _distances.Clear();
+        if (_watching) _optimizer.MarkWorldChanged();
+    }
+
+    private void Changed(object sender, EventArgs args) => _optimizer.MarkWorldChanged();
+
+    private void WatchPopulation()
+    {
+        foreach (var district in _districts.FinishedDistrictCenters)
+        {
+            foreach (var beaver in district.DistrictPopulation.Beavers) WatchPerson(beaver);
+            foreach (var home in district.DistrictBuildingRegistry.GetEnabledBuildings<Dwelling>()) WatchHome(home);
+        }
+    }
+    private void WatchPerson(Beaver beaver)
+    {
+        if (!_watchedPeople.Add(Id(beaver))) return;
+        _optimizer.State.ObservedPeople.Add(Id(beaver));
+        var worker = beaver.GetComponent<Worker>();
+        if (worker) { worker.GotEmployed += Changed; worker.GotUnemployed += Changed; }
+        var dweller = beaver.GetComponent<Dweller>();
+        if (dweller) dweller.RelationsChanged += Changed;
+        var citizen = beaver.GetComponent<Citizen>();
+        if (citizen) citizen.ChangedAssignedDistrict += (sender, args) => _optimizer.MarkWorldChanged();
+        var character = beaver.GetComponent<Character>();
+        if (character) character.Died += Changed;
+    }
+    private void WatchHome(Dwelling home)
+    {
+        if (_watchedHomes.Add(Id(home)))
+        { _optimizer.State.ObservedHomes.Add(Id(home)); home.NumberOfDwellersChanged += Changed; }
     }
 
     public Person GetPerson(Guid id)
     {
         var beaver = Component<Beaver>(id);
         if (!beaver) return null;
+        if (_watching) WatchPerson(beaver);
         var character = beaver.GetComponent<Character>();
         var dweller = beaver.GetComponent<Dweller>();
         var district = beaver.GetComponent<Citizen>()?.AssignedDistrict;
@@ -123,7 +182,7 @@ public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITi
         if (!district) return Array.Empty<Guid>();
         var ids = new List<Guid>();
         // Use committed simulation registries and road graph, never placement-preview state.
-        foreach (var home in district.DistrictBuildingRegistry.GetEnabledBuildings<Dwelling>()) ids.Add(Id(home));
+        foreach (var home in district.DistrictBuildingRegistry.GetEnabledBuildings<Dwelling>()) { ids.Add(Id(home)); if (_watching) WatchHome(home); }
         return ids.ToArray();
     }
 
@@ -218,6 +277,17 @@ public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITi
         oldA.AssignDweller(b);
     }
 
+    public void Transfer(Guid actor, Guid target, Guid partner, Guid lastHome, Guid third)
+    {
+        var a = Component<Dweller>(actor); var b = Component<Dweller>(partner);
+        var c = third == Guid.Empty ? null : Component<Dweller>(third);
+        var first = a.Home; var middle = Component<Dwelling>(target); var last = Component<Dwelling>(lastHome);
+        // Final occupancies have been validated. Free all involved adult beds before
+        // assigning; this method never yields across a tick or save boundary.
+        a.UnassignFromHome(); b.UnassignFromHome(); if (c) c.UnassignFromHome();
+        last.AssignDweller(b); middle.AssignDweller(a); if (c) first.AssignDweller(c);
+    }
+
     private T Component<T>(Guid id) where T : BaseComponent
     {
         if (id == Guid.Empty) return null;
@@ -238,3 +308,5 @@ public sealed class HousingService : ILoadableSingleton, ISaveableSingleton, ITi
         return !blocked || blocked.IsUnblocked;
     }
 }
+
+
