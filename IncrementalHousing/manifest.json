@@ -1,0 +1,8 @@
+{
+  "Name": "Incremental Housing - Preview",
+  "Version": "0.1.0",
+  "Id": "Kyler.IncrementalHousing",
+  "MinimumGameVersion": "1.1.0.0",
+  "Description": "Standalone housing optimizer that gradually improves home-to-work road distance with beneficial moves and swaps. Fixed work budget per simulation tick. No additional mod dependencies. For multiplayer, install the same version on both computers.",
+  "RequiredMods": []
+}

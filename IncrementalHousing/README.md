@@ -3,11 +3,9 @@
 Standalone Timberborn 1.1 mod, built against installed game **1.1.2.4**. Version **0.1.0**.
 Gradually improves beavers' home-to-work commutes through beneficial moves and swaps.
 
-[Download Preview 1](https://github.com/kramsey458/IncrementalHousing/releases/tag/v0.1.0-preview.1)
-
 ## Installation
 
-1. Download `IncrementalHousing-preview1.zip` from the release page. Close Timberborn and extract it into
+1. Close Timberborn. Extract `IncrementalHousing-preview1.zip` into
    `Documents/Timberborn/Mods`. The ZIP contains an `IncrementalHousing-Preview` folder.
 2. Launch Timberborn and enable **Incremental Housing - Preview 0.1.0** in the mod manager.
 3. Restart the game to apply the change.
